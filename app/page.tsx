@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowRight, ArrowUpRight, Bell, BriefcaseBusiness, CalendarClock,
   CalendarDays, Check, CircleAlert, Clock3, Copy, DollarSign, LayoutDashboard,
@@ -27,12 +27,16 @@ type DealRow = {
   updated_at: string;
 };
 
+type DraftTone = "warm" | "direct" | "consultative" | "executive";
+
 type FollowUpRow = {
   id: string;
   deal_id: string;
   subject: string;
   body: string;
   status: "draft" | "scheduled" | "completed";
+  tone: DraftTone;
+  generation_goal: string;
   due_at: string | null;
   created_at: string;
 };
@@ -132,7 +136,8 @@ export default function Home() {
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [activeFollowUpId, setActiveFollowUpId] = useState<string | null>(null);
   const [generatingFollowUp, setGeneratingFollowUp] = useState(false);
-  const [draftTone, setDraftTone] = useState<"warm" | "direct" | "consultative" | "executive">("consultative");
+  const [draftTone, setDraftTone] = useState<DraftTone>("consultative");
+  const followUpRequestId = useRef(0);
   const [draftGoal, setDraftGoal] = useState("");
   const [toast, setToast] = useState("");
   const [formBusy, setFormBusy] = useState(false);
@@ -163,7 +168,7 @@ export default function Home() {
       }
       const { data: followUpRows, error: followUpError } = await supabase
         .from("follow_ups")
-        .select("id, deal_id, subject, body, status, due_at, created_at")
+        .select("id, deal_id, subject, body, status, tone, generation_goal, due_at, created_at")
         .order("created_at", { ascending: false })
         .limit(60);
 
@@ -360,11 +365,15 @@ export default function Home() {
     setActiveFollowUpId(saved?.id ?? null);
     setDraftSubject(saved?.subject ?? "Following up on " + deal.service);
     setDraft(saved?.body ?? draftFor(deal));
-    setDraftGoal("");
+    setDraftTone(saved?.tone ?? "consultative");
+    setDraftGoal(saved?.generation_goal ?? "");
   }
 
-  async function generateAIFollowUp() {
-    if (!selectedDeal) return;
+  async function generateAIFollowUp(options: { tone?: DraftTone; followUpId?: string | null; silent?: boolean } = {}) {
+    if (!selectedDeal || generatingFollowUp) return;
+    const requestId = ++followUpRequestId.current;
+    const toneToUse = options.tone ?? draftTone;
+    const followUpId = options.followUpId === undefined ? activeFollowUpId : options.followUpId;
     setGeneratingFollowUp(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -377,19 +386,39 @@ export default function Home() {
           "Content-Type": "application/json",
           Authorization: "Bearer " + accessToken
         },
-        body: JSON.stringify({ dealId: selectedDeal.id, tone: draftTone, goal: draftGoal })
+        body: JSON.stringify({
+          dealId: selectedDeal.id,
+          followUpId,
+          tone: toneToUse,
+          goal: draftGoal
+        })
       });
       const result = await response.json() as { followUp?: FollowUp; error?: string };
       if (!response.ok || !result.followUp) throw new Error(result.error || "Could not generate the email.");
+      if (requestId !== followUpRequestId.current) return;
+
       setFollowUps((current) => [result.followUp!, ...current.filter((item) => item.id !== result.followUp!.id)]);
       setActiveFollowUpId(result.followUp.id);
       setDraftSubject(result.followUp.subject);
       setDraft(result.followUp.body);
-      notify("AI follow-up drafted and saved. Review it before sending.");
+      setDraftTone(result.followUp.tone);
+      setDraftGoal(result.followUp.generation_goal);
+      notify(options.silent
+        ? "Rewritten in " + toneToUse + " tone. Review the new version."
+        : "AI follow-up drafted and saved. Review it before sending.");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Could not generate this follow-up.");
+      if (requestId === followUpRequestId.current) {
+        notify(error instanceof Error ? error.message : "Could not generate this follow-up.");
+      }
     } finally {
-      setGeneratingFollowUp(false);
+      if (requestId === followUpRequestId.current) setGeneratingFollowUp(false);
+    }
+  }
+
+  function changeDraftTone(nextTone: DraftTone) {
+    setDraftTone(nextTone);
+    if (activeFollowUpId) {
+      void generateAIFollowUp({ tone: nextTone, followUpId: activeFollowUpId, silent: true });
     }
   }
 
@@ -399,14 +428,14 @@ export default function Home() {
       return;
     }
     const { error } = await supabase.from("follow_ups")
-      .update({ subject: draftSubject.trim(), body: draft.trim(), updated_at: new Date().toISOString() })
+      .update({ subject: draftSubject.trim(), body: draft.trim(), tone: draftTone, generation_goal: draftGoal, updated_at: new Date().toISOString() })
       .eq("id", activeFollowUpId);
     if (error) {
       notify("Could not save draft changes: " + error.message);
       return;
     }
     setFollowUps((current) => current.map((item) => item.id === activeFollowUpId
-      ? { ...item, subject: draftSubject.trim(), body: draft.trim() }
+      ? { ...item, subject: draftSubject.trim(), body: draft.trim(), tone: draftTone, generation_goal: draftGoal }
       : item));
     if (selectedDeal) void recordActivity(selectedDeal.id, "follow_up_draft_updated", "Follow-up draft edited: " + draftSubject.trim());
     notify("Draft changes saved.");
@@ -418,13 +447,13 @@ export default function Home() {
       return;
     }
     const { error } = await supabase.from("follow_ups")
-      .update({ subject: draftSubject.trim(), body: draft.trim(), status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({ subject: draftSubject.trim(), body: draft.trim(), tone: draftTone, generation_goal: draftGoal, status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", activeFollowUpId);
     if (error) {
       notify("Could not update follow-up status: " + error.message);
       return;
     }
-    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId ? { ...item, subject: draftSubject.trim(), body: draft.trim(), status: "completed" } : item));
+    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId ? { ...item, subject: draftSubject.trim(), body: draft.trim(), tone: draftTone, generation_goal: draftGoal, status: "completed" } : item));
     setActiveFollowUpId(null);
     notify("Marked as sent. Remember, DealPilot does not send emails itself yet.");
   }
@@ -600,9 +629,9 @@ export default function Home() {
       {selectedDeal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDeal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title"><div className="modal-header"><div><div id="draft-title" className="modal-title">DealPilot follow-up copilot</div><div className="modal-copy">{selectedDeal.company} · {selectedDeal.contact} · {money(selectedDeal.amount)} · {selectedDeal.stage}</div></div><button className="icon-button" aria-label="Close" onClick={() => setSelectedDeal(null)}><X size={16} /></button></div><div className="modal-body">
         <div className="followup-ai-panel">
           <div className="followup-ai-title"><Sparkles size={14} /> Generate a deal-aware follow-up</div>
-          <div className="followup-ai-copy">Uses deal stage, next step, notes and recent activity. Generated emails are saved as drafts for your review.</div>
+          <div className="followup-ai-copy">Uses the buyer, deal stage, next step and available conversation context. Each tone changes the actual writing style. Changing tone rewrites the current AI draft and replaces its saved version.</div>
           <div className="followup-controls">
-            <label className="field"><span>Tone</span><select value={draftTone} onChange={(event) => setDraftTone(event.target.value as typeof draftTone)}><option value="consultative">Consultative</option><option value="warm">Warm</option><option value="direct">Direct</option><option value="executive">Executive</option></select></label>
+            <label className="field"><span>Tone {generatingFollowUp && <small>· Rewriting…</small>}</span><select disabled={generatingFollowUp} value={draftTone} onChange={(event) => changeDraftTone(event.target.value as DraftTone)}><option value="consultative">Consultative</option><option value="warm">Warm</option><option value="direct">Direct</option><option value="executive">Executive</option></select></label>
             <label className="field"><span>Goal (optional)</span><input value={draftGoal} onChange={(event) => setDraftGoal(event.target.value)} placeholder="e.g. Secure a 20-minute review call" maxLength={500} /></label>
           </div>
           <button type="button" className="button-primary followup-generate" disabled={generatingFollowUp} onClick={() => void generateAIFollowUp()}><Sparkles size={14} /> {generatingFollowUp ? "Drafting with AI…" : "Generate AI follow-up"}</button>
@@ -618,7 +647,7 @@ export default function Home() {
             : followUps.filter((item) => item.deal_id === selectedDeal.id).slice(0, 5).map((item) => (
               <div className="saved-followup-row" key={item.id}>
                 <div className="saved-followup-main"><strong>{item.subject}</strong><span>{new Date(item.created_at).toLocaleString()} · {item.status === "completed" ? "Marked sent" : "Draft"}</span></div>
-                <button type="button" className="row-action" onClick={() => { setActiveFollowUpId(item.id); setDraftSubject(item.subject); setDraft(item.body); }}>Open</button>
+                <button type="button" className="row-action" onClick={() => { setActiveFollowUpId(item.status === "draft" ? item.id : null); setDraftSubject(item.subject); setDraft(item.body); setDraftTone(item.tone); setDraftGoal(item.generation_goal); }}>Open</button>
               </div>
             ))}
         </div>
