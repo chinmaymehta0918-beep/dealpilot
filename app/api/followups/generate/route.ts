@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
+type Tone = "warm" | "direct" | "consultative" | "executive";
+
 type DealContext = {
   id: string;
   owner_id: string;
@@ -17,6 +19,33 @@ type DealContext = {
   next_step: string | null;
   follow_up_at: string | null;
   notes: string | null;
+};
+
+const toneInstructions: Record<Tone, string> = {
+  warm: [
+    "Write like a thoughtful person who has an existing professional relationship with the recipient.",
+    "Use a natural, friendly opening and a little conversational warmth, without sounding overly familiar.",
+    "Make the recipient feel respected and unpressured. Use a gentle, easy-to-answer invitation.",
+    "Avoid corporate jargon, forced enthusiasm, exclamation marks, and fake familiarity."
+  ].join(" "),
+  direct: [
+    "Be crisp, confident and economical. Get to the reason for writing in the first sentence.",
+    "Use short sentences and concrete language. State the relevant next step plainly.",
+    "End with one specific, low-friction question or proposed action.",
+    "No pleasantries, throat-clearing, hedging, long context recap, or aggressive urgency."
+  ].join(" "),
+  consultative: [
+    "Sound like a commercially sharp advisor who understands the buyer's decision, not a seller chasing a reply.",
+    "Connect the known business need or deal context to one useful consideration, question or decision point.",
+    "Show thoughtful understanding without pretending to know the buyer's internal priorities.",
+    "Invite a collaborative discussion to resolve the next decision. Avoid generic check-ins and sales clichés."
+  ].join(" "),
+  executive: [
+    "Write for a time-poor senior decision-maker. Lead with the business outcome, decision or unresolved point.",
+    "Be composed, concise and commercially mature. Use precise language and no filler.",
+    "Make the requested action and its business relevance immediately clear.",
+    "Avoid casual language, excessive courtesy, jargon, marketing claims and long explanations."
+  ].join(" ")
 };
 
 function jsonError(message: string, status: number) {
@@ -41,11 +70,16 @@ export async function POST(request: NextRequest) {
     const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
     if (userError || !userData.user) return jsonError("Your session has expired. Please sign in again.", 401);
 
-    const payload = await request.json() as { dealId?: string; tone?: string; goal?: string };
+    const payload = await request.json() as {
+      dealId?: string;
+      followUpId?: string | null;
+      tone?: string;
+      goal?: string;
+    };
     if (!payload.dealId || typeof payload.dealId !== "string") return jsonError("A valid deal is required.", 400);
 
-    const tone = ["warm", "direct", "consultative", "executive"].includes(payload.tone || "")
-      ? payload.tone!
+    const tone: Tone = ["warm", "direct", "consultative", "executive"].includes(payload.tone || "")
+      ? payload.tone as Tone
       : "consultative";
     const goal = typeof payload.goal === "string" ? payload.goal.trim().slice(0, 500) : "";
 
@@ -60,10 +94,25 @@ export async function POST(request: NextRequest) {
     const typedDeal = deal as DealContext;
     const [{ data: activities }, { data: previousDrafts }] = await Promise.all([
       supabase.from("deal_activities").select("activity_type, body, created_at")
-        .eq("deal_id", typedDeal.id).order("created_at", { ascending: false }).limit(8),
-      supabase.from("follow_ups").select("subject, body, status, created_at")
-        .eq("deal_id", typedDeal.id).order("created_at", { ascending: false }).limit(3)
+        .eq("deal_id", typedDeal.id).order("created_at", { ascending: false }).limit(12),
+      supabase.from("follow_ups").select("subject, body, status, tone, created_at")
+        .eq("deal_id", typedDeal.id).order("created_at", { ascending: false }).limit(4)
     ]);
+
+    const internalActivityTypes = new Set([
+      "opportunity_created",
+      "stage_changed",
+      "follow_up_draft_created",
+      "follow_up_draft_updated"
+    ]);
+    const usefulActivity = (activities || [])
+      .filter((item: { activity_type: string; body: string }) => !internalActivityTypes.has(item.activity_type))
+      .slice(0, 5)
+      .map((item: { activity_type: string; body: string; created_at: string }) => ({
+        type: item.activity_type,
+        detail: item.body,
+        at: item.created_at
+      }));
 
     const gatewayToken = request.headers.get("x-vercel-oidc-token")
       || process.env.VERCEL_OIDC_TOKEN
@@ -83,13 +132,15 @@ export async function POST(request: NextRequest) {
       nextStep: typedDeal.next_step || "Not specified",
       followUpDate: typedDeal.follow_up_at,
       notes: typedDeal.notes || "",
-      tone,
-      objective: goal || "Move the conversation to a clear, low-friction next step",
-      recentActivity: (activities || []).map((item: { activity_type: string; body: string; created_at: string }) => ({
-        type: item.activity_type, detail: item.body, at: item.created_at
-      })),
-      previousFollowUps: (previousDrafts || []).map((item: { subject: string; body: string; status: string }) => ({
-        subject: item.subject, body: item.body.slice(0, 700), status: item.status
+      selectedTone: tone,
+      toneInstructions: toneInstructions[tone],
+      objective: goal || "Move the conversation to one clear, low-friction next step",
+      recentClientActivity: usefulActivity,
+      previousFollowUps: (previousDrafts || []).map((item: { subject: string; body: string; status: string; tone: string }) => ({
+        subject: item.subject,
+        body: item.body.slice(0, 500),
+        status: item.status,
+        tone: item.tone
       }))
     };
 
@@ -100,16 +151,29 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "openai/gpt-4.1-mini",
-        temperature: 0.65,
-        max_tokens: 700,
+        model: "openai/gpt-6.1-terra",
+        max_completion_tokens: 850,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
-            content: "You are DealPilot, a thoughtful B2B sales follow-up copilot for agencies and consultancies. Create a concise, specific email that sounds like a capable human seller, not generic marketing copy. Use only facts in the supplied deal context. Never invent a meeting, promise, proposal attachment, customer outcome, pricing detail, or prior conversation. Avoid pressure and false urgency. Acknowledge the deal stage and next step. Keep the email 70–140 words. Return only valid JSON with exactly two string fields: subject and body. The body must include a sensible greeting and sign-off."
+            content: [
+              "You are the senior enterprise account executive's personal follow-up writer inside DealPilot.",
+              "Write one excellent, send-ready B2B email using the deal facts. It must sound written for this specific buyer and moment, not like a reusable sales template.",
+              "TONE REQUIREMENT: Follow the supplied tone instructions exactly. Warm, Direct, Consultative and Executive must produce noticeably different sentence structure, opening, framing and call to action. Do not merely change a few adjectives.",
+              "PERSONALIZATION: Use the company, service, contact, deal stage, next step, notes and genuine client activity where they contain useful information. Mention one or two relevant specifics naturally. If the data is sparse, be restrained and write a clean, honest email rather than inventing context.",
+              "STAGE LOGIC: Discovery means explore the problem or agree a discovery step; Proposal means help the buyer evaluate scope, fit or an open question; Negotiation means resolve a known decision, commercial or timing point without inventing objections; other stages must follow the actual supplied next step.",
+              "QUALITY: Subject line 3–8 words, specific rather than clickbait. Body 65–115 words. One idea per paragraph. One clear call to action, preferably an easy-to-answer question. Natural language, varied sentence rhythm, no unnecessary recap.",
+              "DO NOT use stock openings such as 'I hope this email finds you well', 'Hope you're doing well', 'Just checking in', or 'I wanted to follow up'. Do not say 'circling back', 'touching base', 'kindly do the needful', 'synergies', or 'game changer'.",
+              "TRUTH: Never invent meetings, conversations, proposal delivery, buyer pain, budget, approval, deadlines, metrics, outcomes, attachments or commitments. Do not imply an email was previously sent unless the context confirms it. Do not mention deal value unless it is essential and supported.",
+              "Do not repeat the wording of previous follow-up drafts. Use them only to avoid repetition.",
+              "Return only valid JSON with exactly two string fields: subject and body. The body must include a natural greeting and a simple sign-off. Do not include markdown fences."
+            ].join(" ")
           },
-          { role: "user", content: "Draft a follow-up from this deal context:\n" + JSON.stringify(context) }
+          {
+            role: "user",
+            content: "Write a fresh follow-up email for this opportunity. Selected tone: " + tone.toUpperCase() + ". Apply the tone instructions as behavior, not just a label. Deal context:\n" + JSON.stringify(context)
+          }
         ]
       }),
       cache: "no-store"
@@ -129,26 +193,50 @@ export async function POST(request: NextRequest) {
     const content = completion.choices?.[0]?.message?.content;
     if (!content) return jsonError("The AI service returned an empty draft. Please try again.", 502);
 
-    let draft: { subject?: string; body?: string };
+    let generated: { subject?: string; body?: string };
     try {
-      draft = JSON.parse(content) as { subject?: string; body?: string };
+      generated = JSON.parse(content) as { subject?: string; body?: string };
     } catch {
       return jsonError("The AI service returned an unreadable draft. Please try again.", 502);
     }
 
-    const subject = typeof draft.subject === "string" ? draft.subject.trim().slice(0, 180) : "";
-    const body = typeof draft.body === "string" ? draft.body.trim().slice(0, 6000) : "";
+    const subject = typeof generated.subject === "string" ? generated.subject.trim().slice(0, 180) : "";
+    const body = typeof generated.body === "string" ? generated.body.trim().slice(0, 6000) : "";
     if (!subject || !body) return jsonError("The AI service did not return a complete email draft.", 502);
 
-    const { data: saved, error: saveError } = await supabase.from("follow_ups").insert({
-      owner_id: userData.user.id,
-      deal_id: typedDeal.id,
-      channel: "email",
+    const draftValues = {
+      tone,
+      generation_goal: goal,
       subject,
       body,
-      status: "draft",
-      due_at: typedDeal.follow_up_at
-    }).select("id, deal_id, subject, body, status, due_at, created_at").single();
+      status: "draft" as const,
+      due_at: typedDeal.follow_up_at,
+      updated_at: new Date().toISOString()
+    };
+
+    let saved: Record<string, unknown> | null = null;
+    let saveError: { message: string } | null = null;
+
+    if (payload.followUpId) {
+      const result = await supabase.from("follow_ups")
+        .update(draftValues)
+        .eq("id", payload.followUpId)
+        .eq("deal_id", typedDeal.id)
+        .eq("status", "draft")
+        .select("id, deal_id, subject, body, status, tone, generation_goal, due_at, created_at")
+        .single();
+      saved = result.data as Record<string, unknown> | null;
+      saveError = result.error;
+    } else {
+      const result = await supabase.from("follow_ups").insert({
+        owner_id: userData.user.id,
+        deal_id: typedDeal.id,
+        channel: "email",
+        ...draftValues
+      }).select("id, deal_id, subject, body, status, tone, generation_goal, due_at, created_at").single();
+      saved = result.data as Record<string, unknown> | null;
+      saveError = result.error;
+    }
 
     if (saveError || !saved) {
       console.error("Could not persist follow-up draft:", saveError?.message);
@@ -159,10 +247,10 @@ export async function POST(request: NextRequest) {
       owner_id: userData.user.id,
       deal_id: typedDeal.id,
       activity_type: "follow_up_draft_created",
-      body: "AI drafted an email follow-up: " + subject
+      body: "AI drafted a " + tone + " email follow-up: " + subject
     });
 
-    return NextResponse.json({ followUp: saved, model: "openai/gpt-4.1-mini" });
+    return NextResponse.json({ followUp: saved, model: "openai/gpt-6.1-terra" });
   } catch (error) {
     console.error("Follow-up generation error:", error);
     return jsonError("Something went wrong while preparing this follow-up.", 500);
