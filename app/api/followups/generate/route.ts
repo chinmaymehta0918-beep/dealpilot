@@ -152,6 +152,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         model: "openai/gpt-6.1-terra",
+        temperature: 0.7,
         max_completion_tokens: 850,
         response_format: { type: "json_object" },
         messages: [
@@ -246,7 +247,7 @@ export async function POST(request: NextRequest) {
     await supabase.from("deal_activities").insert({
       owner_id: userData.user.id,
       deal_id: typedDeal.id,
-      activity_type: "follow_up_draft_created",
+      activity_type: payload.followUpId ? "follow_up_draft_regenerated" : "follow_up_draft_created",
       body: "AI drafted a " + tone + " email follow-up: " + subject
     });
 
