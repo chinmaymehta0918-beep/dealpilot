@@ -103,7 +103,8 @@ export async function POST(request: NextRequest) {
       "opportunity_created",
       "stage_changed",
       "follow_up_draft_created",
-      "follow_up_draft_updated"
+      "follow_up_draft_updated",
+      "follow_up_draft_regenerated"
     ]);
     const usefulActivity = (activities || [])
       .filter((item: { activity_type: string; body: string }) => !internalActivityTypes.has(item.activity_type))
