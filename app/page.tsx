@@ -509,7 +509,14 @@ export default function Home() {
         <div className="content">
           <div className="page-heading">
             <div><div className="eyebrow">{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(new Date())} · Your workspace</div><h1 className="page-title">{pageTitle} {activeView === "Overview" ? "👋" : ""}</h1><div className="page-subtitle">A clear view of what needs your attention and where revenue is moving.</div></div>
-            <button className="button-primary" onClick={() => setShowAdd(true)}><Plus size={15} /> Add opportunity</button>
+            <div className="page-heading-actions">
+              <button className="button-secondary ai-entry-button" onClick={() => {
+                const firstDeal = openDeals[0];
+                if (firstDeal) openDraftForDeal(firstDeal);
+                else notify("Add an opportunity first to start an AI follow-up.");
+              }}><Sparkles size={14} /> AI Follow-up Copilot</button>
+              <button className="button-primary" onClick={() => setShowAdd(true)}><Plus size={15} /> Add opportunity</button>
+            </div>
           </div>
 
           <section className="stat-grid" aria-label="Pipeline metrics">
