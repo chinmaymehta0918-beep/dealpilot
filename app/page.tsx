@@ -25,6 +25,8 @@ type DealRow = {
   next_step: string | null;
   follow_up_at: string | null;
   updated_at: string;
+  notes: string | null;
+  is_demo: boolean;
 };
 
 type DraftTone = "warm" | "direct" | "consultative" | "executive";
@@ -57,6 +59,8 @@ type Deal = {
   nextStep: string;
   followUp: string;
   updated: string;
+  notes: string;
+  isDemo: boolean;
 };
 
 const stages: Stage[] = ["Discovery", "Proposal", "Negotiation", "Won", "Lost"];
@@ -83,7 +87,9 @@ function fromDatabase(row: DealRow, index: number): Deal {
     health: row.health,
     nextStep: row.next_step || "Plan next step",
     followUp: row.follow_up_at ? new Date(row.follow_up_at).toISOString().slice(0, 10) : dateAfter(0),
-    updated: "Recently updated"
+    updated: "Recently updated",
+    notes: row.notes || "",
+    isDemo: Boolean(row.is_demo)
   };
 }
 
@@ -141,8 +147,9 @@ export default function Home() {
   const [draftGoal, setDraftGoal] = useState("");
   const [toast, setToast] = useState("");
   const [formBusy, setFormBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [form, setForm] = useState({
-    company: "", service: "", contact: "", email: "", amount: "",
+    company: "", service: "", contact: "", email: "", amount: "", notes: "",
     stage: "Discovery" as Stage, followUp: dateAfter(2), nextStep: "Send an introduction"
   });
 
@@ -157,7 +164,7 @@ export default function Home() {
       setDataLoading(true);
       const { data, error } = await supabase
         .from("deals")
-        .select("id, company, service, contact_name, contact_email, amount, stage, health, next_step, follow_up_at, updated_at")
+        .select("id, company, service, contact_name, contact_email, amount, stage, health, next_step, follow_up_at, updated_at, notes, is_demo")
         .order("updated_at", { ascending: false });
 
       if (!alive) return;
@@ -320,8 +327,10 @@ export default function Home() {
       stage: form.stage,
       health: "On track",
       next_step: form.nextStep.trim() || "Plan next follow-up",
-      follow_up_at: form.followUp ? new Date(form.followUp + "T12:00:00.000Z").toISOString() : null
-    }).select("id, company, service, contact_name, contact_email, amount, stage, health, next_step, follow_up_at, updated_at").single();
+      follow_up_at: form.followUp ? new Date(form.followUp + "T12:00:00.000Z").toISOString() : null,
+      notes: form.notes.trim() || null,
+      is_demo: false
+    }).select("id, company, service, contact_name, contact_email, amount, stage, health, next_step, follow_up_at, updated_at, notes, is_demo").single();
 
     setFormBusy(false);
     if (error) {
@@ -331,10 +340,32 @@ export default function Home() {
 
     setDeals((current) => [fromDatabase(data as DealRow, current.length), ...current]);
     void recordActivity(data.id, "opportunity_created", "Opportunity created: " + form.company.trim());
-    setForm({ company: "", service: "", contact: "", email: "", amount: "", stage: "Discovery", followUp: dateAfter(2), nextStep: "Send an introduction" });
+    setForm({ company: "", service: "", contact: "", email: "", amount: "", notes: "", stage: "Discovery", followUp: dateAfter(2), nextStep: "Send an introduction" });
     setShowAdd(false);
     setActiveView("Deals");
     notify("Opportunity saved to your DealPilot workspace.");
+  }
+
+  async function removeDemoData() {
+    const demoCount = deals.filter((deal) => deal.isDemo).length;
+    if (!demoCount) {
+      notify("There are no sample opportunities to remove.");
+      return;
+    }
+    if (!window.confirm("Remove " + demoCount + " sample opportunities and their sample activity history? Your real opportunities will not be affected.")) return;
+
+    setDemoBusy(true);
+    const { error } = await supabase.from("deals").delete().eq("is_demo", true);
+    setDemoBusy(false);
+    if (error) {
+      notify("Could not remove sample data: " + error.message);
+      return;
+    }
+    setDeals((current) => current.filter((deal) => !deal.isDemo));
+    const removedIds = new Set(deals.filter((deal) => deal.isDemo).map((deal) => deal.id));
+    setFollowUps((current) => current.filter((item) => !removedIds.has(item.deal_id)));
+    if (selectedDeal?.isDemo) setSelectedDeal(null);
+    notify("Sample opportunities removed. Your real deals are untouched.");
   }
 
   async function updateStage(deal: Deal, stage: Stage) {
@@ -544,6 +575,7 @@ export default function Home() {
                 if (firstDeal) openDraftForDeal(firstDeal);
                 else notify("Add an opportunity first to start an AI follow-up.");
               }}><Sparkles size={14} /> AI Follow-up Copilot</button>
+              {deals.some((deal) => deal.isDemo) && <button className="button-secondary remove-demo-button" disabled={demoBusy} onClick={() => void removeDemoData()}><X size={13} /> {demoBusy ? "Removing…" : "Remove sample data"}</button>}
               <button className="button-primary" onClick={() => setShowAdd(true)}><Plus size={15} /> Add opportunity</button>
             </div>
           </div>
@@ -579,7 +611,7 @@ export default function Home() {
                         ? <tr><td colSpan={6}><div className="empty-state">{dataLoading ? "Loading your opportunities…" : "No opportunities yet. Add your first deal to start tracking follow-through."}</div></td></tr>
                         : visibleDeals.map((deal) => (
                           <tr key={deal.id}>
-                            <td><div className="company-cell"><div className="company-logo" style={{ background: deal.color, color: "#466b54" }}>{deal.initials}</div><div><div className="company-name">{deal.company}</div><div className="company-sub">{deal.service}</div></div></div></td>
+                            <td><div className="company-cell"><div className="company-logo" style={{ background: deal.color, color: "#466b54" }}>{deal.initials}</div><div><div className="company-name">{deal.company} {deal.isDemo && <span className="demo-badge">DEMO</span>}</div><div className="company-sub">{deal.service}</div></div></div></td>
                             <td className="amount-cell">{money(deal.amount)}</td>
                             <td><select className="select-control" aria-label={"Stage for " + deal.company} value={deal.stage} onChange={(event) => void updateStage(deal, event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></td>
                             <td><span className={"health-dot" + (deal.health === "Needs attention" ? " attention" : deal.health === "At risk" ? " risk" : "")} />{deal.health}</td>
@@ -624,6 +656,7 @@ export default function Home() {
         <div className="field"><label htmlFor="stage">Stage</label><select id="stage" value={form.stage} onChange={(event) => setForm({ ...form, stage: event.target.value as Stage })}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></div>
         <div className="field"><label htmlFor="followUp">Next follow-up</label><input id="followUp" type="date" value={form.followUp} onChange={(event) => setForm({ ...form, followUp: event.target.value })} /></div>
         <div className="field"><label htmlFor="nextStep">Next step</label><input id="nextStep" value={form.nextStep} onChange={(event) => setForm({ ...form, nextStep: event.target.value })} /></div>
+        <div className="field full"><label htmlFor="dealNotes">Context / notes for the AI copilot</label><textarea id="dealNotes" rows={3} placeholder="What has the buyer said? What are they evaluating? Any blockers or commitments?" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></div>
       </div><div className="modal-footer"><button type="button" className="button-secondary" onClick={() => setShowAdd(false)}>Cancel</button><button type="submit" className="button-primary" disabled={formBusy}>{formBusy ? "Saving…" : "Add opportunity"} <Plus size={14} /></button></div></form></section></div>}
 
       {selectedDeal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDeal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title"><div className="modal-header"><div><div id="draft-title" className="modal-title">DealPilot follow-up copilot</div><div className="modal-copy">{selectedDeal.company} · {selectedDeal.contact} · {money(selectedDeal.amount)} · {selectedDeal.stage}</div></div><button className="icon-button" aria-label="Close" onClick={() => setSelectedDeal(null)}><X size={16} /></button></div><div className="modal-body">
