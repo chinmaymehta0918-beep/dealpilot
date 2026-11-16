@@ -187,7 +187,8 @@ export async function POST(request: NextRequest) {
               "BANNED PHRASES: 'I hope this email finds you well', 'Hope you're doing well', 'Just checking in', 'I wanted to follow up', 'circling back', 'touching base', 'kindly do the needful', 'synergies', 'game changer', 'at your earliest convenience'. Avoid generic 'let me know your thoughts' unless made specific.",
               "TRUTH AND RESTRAINT: Never claim an email, proposal or attachment was sent unless context says so. Never fabricate a buyer quote, pain point, metric, outcome, urgency or commitment. If context is thin, write a shorter, candid email and ask one relevant question instead of making assumptions.",
               "Return only valid JSON with exactly two string fields: subject and body. The body must include a natural greeting using the buyer's first name where available and a simple sign-off. Do not include markdown fences."
-            ].join(" "),
+            ].join(" ")
+          },
           {
             role: "user",
             content: "Write a fresh follow-up email for this opportunity. Selected tone: " + tone.toUpperCase() + ". Apply the tone instructions as behavior, not just a label. Deal context:\n" + JSON.stringify(context)
