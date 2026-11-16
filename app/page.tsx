@@ -393,6 +393,25 @@ export default function Home() {
     }
   }
 
+  async function saveFollowUpChanges() {
+    if (!activeFollowUpId) {
+      notify("Generate an AI draft first so DealPilot can save it.");
+      return;
+    }
+    const { error } = await supabase.from("follow_ups")
+      .update({ subject: draftSubject.trim(), body: draft.trim(), updated_at: new Date().toISOString() })
+      .eq("id", activeFollowUpId);
+    if (error) {
+      notify("Could not save draft changes: " + error.message);
+      return;
+    }
+    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId
+      ? { ...item, subject: draftSubject.trim(), body: draft.trim() }
+      : item));
+    if (selectedDeal) void recordActivity(selectedDeal.id, "follow_up_draft_updated", "Follow-up draft edited: " + draftSubject.trim());
+    notify("Draft changes saved.");
+  }
+
   async function markFollowUpSent() {
     if (!activeFollowUpId) {
       notify("Generate and save a draft first.");
@@ -584,7 +603,7 @@ export default function Home() {
         <div className="field"><label htmlFor="draft-to">To</label><input id="draft-to" readOnly value={selectedDeal.email || "Add a contact email to this opportunity"} /></div>
         <div className="field"><label htmlFor="draft-subject">Subject</label><input id="draft-subject" value={draftSubject} onChange={(event) => setDraftSubject(event.target.value)} /></div>
         <div className="field"><label htmlFor="draft-message">Email message</label><textarea id="draft-message" value={draft} onChange={(event) => setDraft(event.target.value)} /></div>
-        <div className="modal-footer"><button type="button" className="button-secondary" onClick={() => { setActiveFollowUpId(null); setDraftSubject("Following up on " + selectedDeal.service); setDraft(draftFor(selectedDeal)); }}>Reset starter draft</button><button type="button" className="button-primary" onClick={() => void copyDraft()}><Copy size={14} /> Copy email</button></div>
+        <div className="modal-footer"><button type="button" className="button-secondary" onClick={() => { setActiveFollowUpId(null); setDraftSubject("Following up on " + selectedDeal.service); setDraft(draftFor(selectedDeal)); }}>Reset starter draft</button><div style={{ display: "flex", gap: 8 }}><button type="button" className="button-secondary" disabled={!activeFollowUpId} onClick={() => void saveFollowUpChanges()}>Save changes</button><button type="button" className="button-primary" onClick={() => void copyDraft()}><Copy size={14} /> Copy email</button></div></div>
         <div className="saved-followups">
           <div className="saved-followups-heading">Saved drafts for this deal</div>
           {followUps.filter((item) => item.deal_id === selectedDeal.id).length === 0
