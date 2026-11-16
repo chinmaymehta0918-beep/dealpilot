@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
-let browserClient: ReturnType<typeof createClient> | null = null;
+let browserClient: any = null;
 
 export function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -11,7 +11,7 @@ export function getSupabaseClient() {
   }
 
   if (!browserClient) {
-    browserClient = createClient(url, publishableKey, {
+    browserClient = createClient<any>(url, publishableKey, {
       auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true }
     });
   }
