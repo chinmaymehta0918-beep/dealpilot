@@ -417,7 +417,7 @@ export default function Home() {
 
   function changeDraftTone(nextTone: DraftTone) {
     setDraftTone(nextTone);
-    if (activeFollowUpId) {
+    if (selectedDeal) {
       void generateAIFollowUp({ tone: nextTone, followUpId: activeFollowUpId, silent: true });
     }
   }
