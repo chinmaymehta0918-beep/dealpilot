@@ -254,3 +254,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .ai-entry-button { border-color: #cfe2d3; color: #356c48; background: #f2f8f3; }
 .ai-entry-button:hover { border-color: #a8cbb0; background: #eaf4ec; }
 @media (max-width: 560px) { .page-heading-actions { width: 100%; } .page-heading-actions > button { flex: 1; justify-content: center; } }
+
+.demo-badge { display: inline-flex; align-items: center; vertical-align: 1px; margin-left: 5px; padding: 2px 5px; border: 1px solid #ead9aa; border-radius: 4px; color: #8c6a23; background: #fff8e8; font-size: 8px; font-weight: 800; letter-spacing: .6px; }
+.remove-demo-button { color: #8a6d37; border-color: #eadfc5; background: #fffaf0; }
+.remove-demo-button:hover { border-color: #ddc58d; background: #fff5df; }
