@@ -27,6 +27,18 @@ type DealRow = {
   updated_at: string;
 };
 
+type FollowUpRow = {
+  id: string;
+  deal_id: string;
+  subject: string;
+  body: string;
+  status: "draft" | "scheduled" | "completed";
+  due_at: string | null;
+  created_at: string;
+};
+
+type FollowUp = FollowUpRow;
+
 type Deal = {
   id: string;
   company: string;
@@ -116,6 +128,12 @@ export default function Home() {
   const [showAdd, setShowAdd] = useState(false);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [draft, setDraft] = useState("");
+  const [draftSubject, setDraftSubject] = useState("");
+  const [followUps, setFollowUps] = useState<FollowUp[]>([]);
+  const [activeFollowUpId, setActiveFollowUpId] = useState<string | null>(null);
+  const [generatingFollowUp, setGeneratingFollowUp] = useState(false);
+  const [draftTone, setDraftTone] = useState<"warm" | "direct" | "consultative" | "executive">("consultative");
+  const [draftGoal, setDraftGoal] = useState("");
   const [toast, setToast] = useState("");
   const [formBusy, setFormBusy] = useState(false);
   const [form, setForm] = useState({
@@ -142,6 +160,18 @@ export default function Home() {
         setToast("Could not load opportunities: " + error.message);
       } else {
         setDeals((data ?? []).map((row: DealRow, index: number) => fromDatabase(row, index)));
+      }
+      const { data: followUpRows, error: followUpError } = await supabase
+        .from("follow_ups")
+        .select("id, deal_id, subject, body, status, due_at, created_at")
+        .order("created_at", { ascending: false })
+        .limit(60);
+
+      if (!alive) return;
+      if (followUpError) {
+        setToast("Could not load saved follow-ups: " + followUpError.message);
+      } else {
+        setFollowUps((followUpRows ?? []) as FollowUp[]);
       }
       setDataLoading(false);
     };
@@ -293,6 +323,7 @@ export default function Home() {
     }
 
     setDeals((current) => [fromDatabase(data as DealRow, current.length), ...current]);
+    void recordActivity(data.id, "opportunity_created", "Opportunity created: " + form.company.trim());
     setForm({ company: "", service: "", contact: "", email: "", amount: "", stage: "Discovery", followUp: dateAfter(2), nextStep: "Send an introduction" });
     setShowAdd(false);
     setActiveView("Deals");
@@ -306,13 +337,81 @@ export default function Home() {
       return;
     }
     setDeals((current) => current.map((item) => item.id === deal.id ? { ...item, stage } : item));
+    void recordActivity(deal.id, "stage_changed", "Stage changed from " + deal.stage + " to " + stage + ".");
     notify(deal.company + " moved to " + stage + ".");
+  }
+
+  async function recordActivity(dealId: string, activityType: string, body: string) {
+    if (!user) return;
+    const { error } = await supabase.from("deal_activities").insert({
+      owner_id: user.id,
+      deal_id: dealId,
+      activity_type: activityType,
+      body
+    });
+    if (error) console.warn("Could not record deal activity:", error.message);
+  }
+
+  function openDraftForDeal(deal: Deal) {
+    const saved = followUps.find((item) => item.deal_id === deal.id && item.status === "draft");
+    setSelectedDeal(deal);
+    setActiveFollowUpId(saved?.id ?? null);
+    setDraftSubject(saved?.subject ?? "Following up on " + deal.service);
+    setDraft(saved?.body ?? draftFor(deal));
+    setDraftGoal("");
+  }
+
+  async function generateAIFollowUp() {
+    if (!selectedDeal) return;
+    setGeneratingFollowUp(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Your session has expired. Please sign in again.");
+
+      const response = await fetch("/api/followups/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + accessToken
+        },
+        body: JSON.stringify({ dealId: selectedDeal.id, tone: draftTone, goal: draftGoal })
+      });
+      const result = await response.json() as { followUp?: FollowUp; error?: string };
+      if (!response.ok || !result.followUp) throw new Error(result.error || "Could not generate the email.");
+      setFollowUps((current) => [result.followUp!, ...current.filter((item) => item.id !== result.followUp!.id)]);
+      setActiveFollowUpId(result.followUp.id);
+      setDraftSubject(result.followUp.subject);
+      setDraft(result.followUp.body);
+      notify("AI follow-up drafted and saved. Review it before sending.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not generate this follow-up.");
+    } finally {
+      setGeneratingFollowUp(false);
+    }
+  }
+
+  async function markFollowUpSent() {
+    if (!activeFollowUpId) {
+      notify("Generate and save a draft first.");
+      return;
+    }
+    const { error } = await supabase.from("follow_ups")
+      .update({ status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", activeFollowUpId);
+    if (error) {
+      notify("Could not update follow-up status: " + error.message);
+      return;
+    }
+    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId ? { ...item, status: "completed" } : item));
+    setActiveFollowUpId(null);
+    notify("Marked as sent. Remember, DealPilot does not send emails itself yet.");
   }
 
   async function copyDraft() {
     try {
-      await navigator.clipboard.writeText(draft);
-      notify("Follow-up copied to clipboard.");
+      await navigator.clipboard.writeText("Subject: " + draftSubject + "\\n\\n" + draft);
+      notify("Email subject and body copied to clipboard.");
     } catch {
       notify("Clipboard access was blocked by your browser.");
     }
@@ -428,7 +527,7 @@ export default function Home() {
                             <td><select className="select-control" aria-label={"Stage for " + deal.company} value={deal.stage} onChange={(event) => void updateStage(deal, event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></td>
                             <td><span className={"health-dot" + (deal.health === "Needs attention" ? " attention" : deal.health === "At risk" ? " risk" : "")} />{deal.health}</td>
                             <td><div style={{ maxWidth: 155, overflow: "hidden", textOverflow: "ellipsis" }}>{deal.nextStep}</div><div className="company-sub">{dueLabel(deal.followUp)}</div></td>
-                            <td><button className="row-action" onClick={() => { setSelectedDeal(deal); setDraft(draftFor(deal)); }}><Mail size={12} /> Draft</button></td>
+                            <td><button className="row-action" onClick={() => openDraftForDeal(deal)}><Mail size={12} /> Draft</button></td>
                           </tr>
                         ))}
                     </tbody>
@@ -444,7 +543,7 @@ export default function Home() {
                   {dueDeals.length === 0 ? <div className="empty-state">You're all caught up. Add a next step to keep a deal moving.</div> : dueDeals.slice(0, 5).map((deal) => (
                     <div className="priority-item" key={deal.id}>
                       <div className={"priority-icon" + (deal.health === "At risk" ? " red" : " green")}>{deal.health === "At risk" ? <CircleAlert size={14} /> : <Clock3 size={14} />}</div>
-                      <div className="priority-content"><div className="priority-title">{deal.company}</div><div className="priority-detail">{deal.nextStep} · {money(deal.amount)}</div><button className="priority-link" onClick={() => { setSelectedDeal(deal); setDraft(draftFor(deal)); }}>Prepare follow-up <ArrowUpRight size={11} /></button></div>
+                      <div className="priority-content"><div className="priority-title">{deal.company}</div><div className="priority-detail">{deal.nextStep} · {money(deal.amount)}</div><button className="priority-link" onClick={() => openDraftForDeal(deal)}>Prepare follow-up <ArrowUpRight size={11} /></button></div>
                       <div className="priority-time">{dueLabel(deal.followUp)}</div>
                     </div>
                   ))}
@@ -470,7 +569,33 @@ export default function Home() {
         <div className="field"><label htmlFor="nextStep">Next step</label><input id="nextStep" value={form.nextStep} onChange={(event) => setForm({ ...form, nextStep: event.target.value })} /></div>
       </div><div className="modal-footer"><button type="button" className="button-secondary" onClick={() => setShowAdd(false)}>Cancel</button><button type="submit" className="button-primary" disabled={formBusy}>{formBusy ? "Saving…" : "Add opportunity"} <Plus size={14} /></button></div></form></section></div>}
 
-      {selectedDeal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDeal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title"><div className="modal-header"><div><div id="draft-title" className="modal-title">Draft a thoughtful follow-up</div><div className="modal-copy">{selectedDeal.company} · {selectedDeal.contact} · {money(selectedDeal.amount)}</div></div><button className="icon-button" aria-label="Close" onClick={() => setSelectedDeal(null)}><X size={16} /></button></div><div className="modal-body"><div style={{ padding: 11, borderRadius: 8, background: "#f3f8f4", color: "#587563", fontSize: 10, lineHeight: 1.6 }}><Sparkles size={13} style={{ display: "inline", verticalAlign: "-3px", marginRight: 5 }} /> Starter draft based on the deal details. AI generation is the next feature to connect.</div><div className="field"><label htmlFor="draft-to">To</label><input id="draft-to" readOnly value={selectedDeal.email || "Add a contact email to this opportunity"} /></div><div className="field"><label htmlFor="draft-message">Email message</label><textarea id="draft-message" value={draft} onChange={(event) => setDraft(event.target.value)} /></div><div className="modal-footer"><button type="button" className="button-secondary" onClick={() => setDraft(draftFor(selectedDeal))}>Reset draft</button><button type="button" className="button-primary" onClick={() => void copyDraft()}><Copy size={14} /> Copy draft</button></div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, paddingTop: 5 }}><span style={{ fontSize: 10, color: "#9aa49d" }}>Sending is not connected yet.</span><button className="row-action" onClick={() => { void updateStage(selectedDeal, "Negotiation"); setSelectedDeal(null); }}>Move to negotiation <ArrowUpRight size={12} /></button></div></div></section></div>}
+      {selectedDeal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDeal(null); }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title"><div className="modal-header"><div><div id="draft-title" className="modal-title">DealPilot follow-up copilot</div><div className="modal-copy">{selectedDeal.company} · {selectedDeal.contact} · {money(selectedDeal.amount)} · {selectedDeal.stage}</div></div><button className="icon-button" aria-label="Close" onClick={() => setSelectedDeal(null)}><X size={16} /></button></div><div className="modal-body">
+        <div className="followup-ai-panel">
+          <div className="followup-ai-title"><Sparkles size={14} /> Generate a deal-aware follow-up</div>
+          <div className="followup-ai-copy">Uses deal stage, next step, notes and recent activity. Generated emails are saved as drafts for your review.</div>
+          <div className="followup-controls">
+            <label className="field"><span>Tone</span><select value={draftTone} onChange={(event) => setDraftTone(event.target.value as typeof draftTone)}><option value="consultative">Consultative</option><option value="warm">Warm</option><option value="direct">Direct</option><option value="executive">Executive</option></select></label>
+            <label className="field"><span>Goal (optional)</span><input value={draftGoal} onChange={(event) => setDraftGoal(event.target.value)} placeholder="e.g. Secure a 20-minute review call" maxLength={500} /></label>
+          </div>
+          <button type="button" className="button-primary followup-generate" disabled={generatingFollowUp} onClick={() => void generateAIFollowUp()}><Sparkles size={14} /> {generatingFollowUp ? "Drafting with AI…" : "Generate AI follow-up"}</button>
+        </div>
+        <div className="field"><label htmlFor="draft-to">To</label><input id="draft-to" readOnly value={selectedDeal.email || "Add a contact email to this opportunity"} /></div>
+        <div className="field"><label htmlFor="draft-subject">Subject</label><input id="draft-subject" value={draftSubject} onChange={(event) => setDraftSubject(event.target.value)} /></div>
+        <div className="field"><label htmlFor="draft-message">Email message</label><textarea id="draft-message" value={draft} onChange={(event) => setDraft(event.target.value)} /></div>
+        <div className="modal-footer"><button type="button" className="button-secondary" onClick={() => { setActiveFollowUpId(null); setDraftSubject("Following up on " + selectedDeal.service); setDraft(draftFor(selectedDeal)); }}>Reset starter draft</button><button type="button" className="button-primary" onClick={() => void copyDraft()}><Copy size={14} /> Copy email</button></div>
+        <div className="saved-followups">
+          <div className="saved-followups-heading">Saved drafts for this deal</div>
+          {followUps.filter((item) => item.deal_id === selectedDeal.id).length === 0
+            ? <div className="saved-followups-empty">No saved drafts yet. Generate one above.</div>
+            : followUps.filter((item) => item.deal_id === selectedDeal.id).slice(0, 5).map((item) => (
+              <div className="saved-followup-row" key={item.id}>
+                <div className="saved-followup-main"><strong>{item.subject}</strong><span>{new Date(item.created_at).toLocaleString()} · {item.status === "completed" ? "Marked sent" : "Draft"}</span></div>
+                <button type="button" className="row-action" onClick={() => { setActiveFollowUpId(item.id); setDraftSubject(item.subject); setDraft(item.body); }}>Open</button>
+              </div>
+            ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, paddingTop: 5 }}><span style={{ fontSize: 10, color: "#9aa49d" }}>DealPilot prepares drafts; you control sending.</span><div style={{ display: "flex", gap: 8, alignItems: "center" }}><button className="row-action" disabled={!activeFollowUpId} onClick={() => void markFollowUpSent()}>Mark sent</button><button className="row-action" onClick={() => { void updateStage(selectedDeal, "Negotiation"); setSelectedDeal(null); }}>Move to negotiation <ArrowUpRight size={12} /></button></div></div>
+      </div></section></div>}
 
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
