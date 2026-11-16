@@ -145,6 +145,7 @@ export default function Home() {
   const [draftTone, setDraftTone] = useState<DraftTone>("consultative");
   const followUpRequestId = useRef(0);
   const [draftGoal, setDraftGoal] = useState("");
+  const [draftContext, setDraftContext] = useState("");
   const [toast, setToast] = useState("");
   const [formBusy, setFormBusy] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
@@ -398,6 +399,7 @@ export default function Home() {
     setDraft(saved?.body ?? draftFor(deal));
     setDraftTone(saved?.tone ?? "consultative");
     setDraftGoal(saved?.generation_goal ?? "");
+    setDraftContext(deal.notes || "");
   }
 
   async function generateAIFollowUp(options: { tone?: DraftTone; followUpId?: string | null; silent?: boolean } = {}) {
@@ -421,7 +423,8 @@ export default function Home() {
           dealId: selectedDeal.id,
           followUpId,
           tone: toneToUse,
-          goal: draftGoal
+          goal: draftGoal,
+          buyerContext: draftContext
         })
       });
       const result = await response.json() as { followUp?: FollowUp; error?: string };
@@ -434,6 +437,7 @@ export default function Home() {
       setDraft(result.followUp.body);
       setDraftTone(result.followUp.tone);
       setDraftGoal(result.followUp.generation_goal);
+      setDeals((current) => current.map((deal) => deal.id === selectedDeal.id ? { ...deal, notes: draftContext } : deal));
       notify(options.silent
         ? "Rewritten in " + toneToUse + " tone. Review the new version."
         : "AI follow-up drafted and saved. Review it before sending.");
@@ -666,6 +670,7 @@ export default function Home() {
           <div className="followup-controls">
             <label className="field"><span>Tone {generatingFollowUp && <small>· Rewriting…</small>}</span><select disabled={generatingFollowUp} value={draftTone} onChange={(event) => changeDraftTone(event.target.value as DraftTone)}><option value="consultative">Consultative</option><option value="warm">Warm</option><option value="direct">Direct</option><option value="executive">Executive</option></select></label>
             <label className="field"><span>Goal (optional)</span><input value={draftGoal} onChange={(event) => setDraftGoal(event.target.value)} placeholder="e.g. Secure a 20-minute review call" maxLength={500} /></label>
+          <label className="field full"><span>Buyer context / last conversation</span><textarea rows={3} value={draftContext} onChange={(event) => setDraftContext(event.target.value)} placeholder="What did the buyer ask, what are they trying to solve, what concern came up, or what did you agree to do next? Specific details make the email much better." maxLength={2500} /></label>
           </div>
           <button type="button" className="button-primary followup-generate" disabled={generatingFollowUp} onClick={() => void generateAIFollowUp()}><Sparkles size={14} /> {generatingFollowUp ? "Drafting with AI…" : "Generate AI follow-up"}</button>
         </div>
@@ -680,7 +685,7 @@ export default function Home() {
             : followUps.filter((item) => item.deal_id === selectedDeal.id).slice(0, 5).map((item) => (
               <div className="saved-followup-row" key={item.id}>
                 <div className="saved-followup-main"><strong>{item.subject}</strong><span>{new Date(item.created_at).toLocaleString()} · {item.status === "completed" ? "Marked sent" : "Draft"}</span></div>
-                <button type="button" className="row-action" onClick={() => { setActiveFollowUpId(item.status === "draft" ? item.id : null); setDraftSubject(item.subject); setDraft(item.body); setDraftTone(item.tone); setDraftGoal(item.generation_goal); }}>Open</button>
+                <button type="button" className="row-action" onClick={() => { setActiveFollowUpId(item.status === "draft" ? item.id : null); setDraftSubject(item.subject); setDraft(item.body); setDraftTone(item.tone); setDraftGoal(item.generation_goal); setDraftContext(selectedDeal.notes || ""); }}>Open</button>
               </div>
             ))}
         </div>
