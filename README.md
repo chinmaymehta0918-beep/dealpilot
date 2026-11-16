@@ -28,4 +28,13 @@ Create a `.env.local` file from `.env.example` when Supabase is configured.
 
 ## Current status
 
-Initial UI scaffold. Demo data is local-only and is not persisted yet.
+- Email/password sign-up and sign-in via Supabase Auth
+- User-owned opportunities stored in Supabase Postgres with Row Level Security
+- Pipeline dashboard, deal capture, stage updates, search and follow-up drafts
+- AI generation and Gmail sending are not connected yet
+
+## Environment variables
+
+Copy the environment variable names from `.env.example` into your local `.env.local` file. The Vercel production, preview and development environments are configured for the connected Supabase project.
+
+Apply the SQL in `supabase/migrations` to a fresh Supabase project. Never commit secret or service-role keys.
