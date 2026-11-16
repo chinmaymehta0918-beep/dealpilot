@@ -7,6 +7,7 @@ import {
   LogOut, Mail, Plus, Search, Sparkles, Target, TrendingUp, X
 } from "lucide-react";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import type { Session } from "@supabase/supabase-js";
 
 type Stage = "Discovery" | "Proposal" | "Negotiation" | "Won" | "Lost";
 type Health = "On track" | "Needs attention" | "At risk";
@@ -137,12 +138,12 @@ export default function Home() {
       if (error) {
         setToast("Could not load opportunities: " + error.message);
       } else {
-        setDeals((data ?? []).map((row, index) => fromDatabase(row as DealRow, index)));
+        setDeals((data ?? []).map((row: DealRow, index: number) => fromDatabase(row, index)));
       }
       setDataLoading(false);
     };
 
-    supabase.auth.getSession().then(({ data, error }) => {
+    supabase.auth.getSession().then((result: { data: { session: Session | null }; error: { message: string } | null }) => {\n      const { data, error } = result;
       if (!alive) return;
       if (error) setAuthMessage(error.message);
       const currentUser = data.session?.user;
@@ -151,7 +152,7 @@ export default function Home() {
       if (currentUser) void loadDeals();
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
       if (!alive) return;
       const currentUser = session?.user;
       setUser(currentUser ? { id: currentUser.id, email: currentUser.email } : null);
