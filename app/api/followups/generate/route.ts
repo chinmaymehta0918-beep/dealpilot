@@ -75,6 +75,7 @@ export async function POST(request: NextRequest) {
       followUpId?: string | null;
       tone?: string;
       goal?: string;
+      buyerContext?: string;
     };
     if (!payload.dealId || typeof payload.dealId !== "string") return jsonError("A valid deal is required.", 400);
 
@@ -82,6 +83,9 @@ export async function POST(request: NextRequest) {
       ? payload.tone as Tone
       : "consultative";
     const goal = typeof payload.goal === "string" ? payload.goal.trim().slice(0, 500) : "";
+    const buyerContext = typeof payload.buyerContext === "string"
+      ? payload.buyerContext.trim().slice(0, 2500)
+      : "";
 
     const { data: deal, error: dealError } = await supabase
       .from("deals")
@@ -92,6 +96,14 @@ export async function POST(request: NextRequest) {
     if (dealError || !deal) return jsonError("That opportunity could not be found in your workspace.", 404);
 
     const typedDeal = deal as DealContext;
+    if (buyerContext && buyerContext !== (typedDeal.notes || "")) {
+      const { error: contextSaveError } = await supabase
+        .from("deals")
+        .update({ notes: buyerContext, updated_at: new Date().toISOString() })
+        .eq("id", typedDeal.id);
+      if (contextSaveError) return jsonError("Could not save the buyer context. Please try again.", 500);
+      typedDeal.notes = buyerContext;
+    }
     const [{ data: activities }, { data: previousDrafts }] = await Promise.all([
       supabase.from("deal_activities").select("activity_type, body, created_at")
         .eq("deal_id", typedDeal.id).order("created_at", { ascending: false }).limit(12),
@@ -133,6 +145,7 @@ export async function POST(request: NextRequest) {
       nextStep: typedDeal.next_step || "Not specified",
       followUpDate: typedDeal.follow_up_at,
       notes: typedDeal.notes || "",
+      buyerContext: buyerContext || typedDeal.notes || "",
       selectedTone: tone,
       toneInstructions: toneInstructions[tone],
       objective: goal || "Move the conversation to one clear, low-friction next step",
@@ -152,7 +165,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "openai/gpt-6.1-terra",
+        model: "openai/gpt-6.1-sol",
         temperature: 0.7,
         max_completion_tokens: 850,
         response_format: { type: "json_object" },
@@ -160,18 +173,21 @@ export async function POST(request: NextRequest) {
           {
             role: "system",
             content: [
-              "You are the senior enterprise account executive's personal follow-up writer inside DealPilot.",
-              "Write one excellent, send-ready B2B email using the deal facts. It must sound written for this specific buyer and moment, not like a reusable sales template.",
-              "TONE REQUIREMENT: Follow the supplied tone instructions exactly. Warm, Direct, Consultative and Executive must produce noticeably different sentence structure, opening, framing and call to action. Do not merely change a few adjectives.",
-              "PERSONALIZATION: Use the company, service, contact, deal stage, next step, notes and genuine client activity where they contain useful information. Mention one or two relevant specifics naturally. If the data is sparse, be restrained and write a clean, honest email rather than inventing context.",
-              "STAGE LOGIC: Discovery means explore the problem or agree a discovery step; Proposal means help the buyer evaluate scope, fit or an open question; Negotiation means resolve a known decision, commercial or timing point without inventing objections; other stages must follow the actual supplied next step.",
-              "QUALITY: Subject line 3–8 words, specific rather than clickbait. Body 65–115 words. One idea per paragraph. One clear call to action, preferably an easy-to-answer question. Natural language, varied sentence rhythm, no unnecessary recap.",
-              "DO NOT use stock openings such as 'I hope this email finds you well', 'Hope you're doing well', 'Just checking in', or 'I wanted to follow up'. Do not say 'circling back', 'touching base', 'kindly do the needful', 'synergies', or 'game changer'.",
-              "TRUTH: Never invent meetings, conversations, proposal delivery, buyer pain, budget, approval, deadlines, metrics, outcomes, attachments or commitments. Do not imply an email was previously sent unless the context confirms it. Do not mention deal value unless it is essential and supported.",
-              "Do not repeat the wording of previous follow-up drafts. Use them only to avoid repetition.",
-              "Return only valid JSON with exactly two string fields: subject and body. The body must include a natural greeting and a simple sign-off. Do not include markdown fences."
-            ].join(" ")
-          },
+              "You write high-quality, human B2B sales emails for an experienced account executive. Your job is to move this exact buyer conversation forward, not to produce a generic CRM follow-up.",
+              "FIRST understand the moment: identify the buyer, what they are evaluating, the current stage, the next agreed action, the real blocker (only if stated), and what would make replying easy. Use the strongest available facts from the buyer context and notes. Never invent a relationship, meeting, conversation, objection, deadline, budget, decision process, product capability or promised action.",
+              "PERSONALIZATION: Refer naturally to one meaningful specific from the supplied buyer context, company, service or agreed next step. Do not awkwardly repeat the company name or list deal metadata. Do not mention deal value unless commercially necessary and explicitly relevant.",
+              "STAGE: Discovery = help clarify the problem or agree the next discovery conversation. Proposal = help evaluate fit, scope, outcomes or an open question in the proposal. Negotiation = address the actual unresolved commercial or decision point without creating pressure. Other stages = follow the supplied next step.",
+              "TONE MUST CHANGE THE STRUCTURE, NOT JUST THE ADJECTIVES. Selected tone: " + tone.toUpperCase() + ". Follow the matching blueprint below:",
+              "WARM: Open with a natural, personable reference to the actual conversation or context. Use relaxed, considerate language. Make the reply feel easy and pressure-free. CTA is a gentle invitation or offer to help.",
+              "DIRECT: Lead immediately with the exact reason for writing. Keep it to 2–4 short sentences. State the decision or action plainly. CTA is one clear, specific question. No warm-up paragraph.",
+              "CONSULTATIVE: Lead with a useful observation, trade-off or decision point grounded in buyer context. Frame the email around helping the buyer make a sound decision. CTA invites their perspective or proposes a collaborative working session. Do not lecture or assume their priorities.",
+              "EXECUTIVE: Lead with business impact or the decision that needs to be made. Use concise, polished language for a senior stakeholder. Include only essential context and one crisp recommendation or decision request. No casual filler.",
+              "Make the four tones visibly different in opening, sentence length, framing and CTA. If regenerating from a previous draft, rewrite it from scratch in the selected voice. Do not preserve the previous draft's structure just because the deal facts are unchanged.",
+              "QUALITY BAR: Subject line 3–7 words and specific. Email body 55–100 words, excluding greeting/sign-off. Two or three short paragraphs. One clear CTA. Use natural spoken business English, varied sentence rhythm and concrete nouns/verbs. Prefer a useful observation over 'checking in'.",
+              "BANNED PHRASES: 'I hope this email finds you well', 'Hope you're doing well', 'Just checking in', 'I wanted to follow up', 'circling back', 'touching base', 'kindly do the needful', 'synergies', 'game changer', 'at your earliest convenience'. Avoid generic 'let me know your thoughts' unless made specific.",
+              "TRUTH AND RESTRAINT: Never claim an email, proposal or attachment was sent unless context says so. Never fabricate a buyer quote, pain point, metric, outcome, urgency or commitment. If context is thin, write a shorter, candid email and ask one relevant question instead of making assumptions.",
+              "Return only valid JSON with exactly two string fields: subject and body. The body must include a natural greeting using the buyer's first name where available and a simple sign-off. Do not include markdown fences."
+            ].join(" "),
           {
             role: "user",
             content: "Write a fresh follow-up email for this opportunity. Selected tone: " + tone.toUpperCase() + ". Apply the tone instructions as behavior, not just a label. Deal context:\n" + JSON.stringify(context)
@@ -252,7 +268,7 @@ export async function POST(request: NextRequest) {
       body: "AI drafted a " + tone + " email follow-up: " + subject
     });
 
-    return NextResponse.json({ followUp: saved, model: "openai/gpt-6.1-terra" });
+    return NextResponse.json({ followUp: saved, model: "openai/gpt-6.1-sol" });
   } catch (error) {
     console.error("Follow-up generation error:", error);
     return jsonError("Something went wrong while preparing this follow-up.", 500);
