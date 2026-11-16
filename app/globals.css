@@ -228,3 +228,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .auth-muted { color: #718078; font-size: 12px; }
 .signout-button { margin-left: 2px; white-space: nowrap; }
 @media (max-width: 560px) { .auth-card { padding: 26px 21px; } .auth-title { font-size: 26px; } }
+
+.auth-forgot { display: block; margin: 10px auto 0; padding: 4px 6px; border: 0; color: #28734f; background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
+.auth-forgot:hover, .auth-switch button:hover { text-decoration: underline; }
