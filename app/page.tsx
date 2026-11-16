@@ -11,6 +11,7 @@ import type { Session } from "@supabase/supabase-js";
 
 type Stage = "Discovery" | "Proposal" | "Negotiation" | "Won" | "Lost";
 type Health = "On track" | "Needs attention" | "At risk";
+const APP_URL = "https://dealpilot-chinu0918.vercel.app";
 
 type DealRow = {
   id: string;
@@ -102,7 +103,9 @@ export default function Home() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authMode, setAuthMode] = useState<"signin" | "signup" | "forgot">("signin");
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -153,7 +156,8 @@ export default function Home() {
       if (currentUser) void loadDeals();
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: string, session: Session | null) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event: string, session: Session | null) => {
+      if (event === "PASSWORD_RECOVERY") setIsPasswordRecovery(true);
       if (!alive) return;
       const currentUser = session?.user;
       setUser(currentUser ? { id: currentUser.id, email: currentUser.email } : null);
@@ -199,18 +203,58 @@ export default function Home() {
     setAuthBusy(true);
     setAuthMessage("");
     const email = authEmail.trim().toLowerCase();
-    const result = authMode === "signup"
-      ? await supabase.auth.signUp({ email, password: authPassword })
-      : await supabase.auth.signInWithPassword({ email, password: authPassword });
 
-    if (result.error) {
-      setAuthMessage(result.error.message);
-    } else if (authMode === "signup" && !result.data.session) {
-      setAuthMessage("Your account was created. Check your inbox for the confirmation link, then sign in.");
-    } else {
-      setAuthMessage("");
+    try {
+      if (authMode === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: APP_URL });
+        setAuthMessage(error
+          ? error.message
+          : "Password reset email requested. Check your inbox and spam folder. The reset link will return you to DealPilot.");
+      } else if (authMode === "signup") {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password: authPassword,
+          options: { emailRedirectTo: APP_URL }
+        });
+        if (error) {
+          setAuthMessage(error.message);
+        } else if (!data.session) {
+          setAuthMode("signin");
+          setAuthMessage("If this is a new account, check your inbox for the confirmation link. If you have registered before, sign in or use Forgot password.");
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password: authPassword });
+        if (error) {
+          setAuthMessage(error.message === "Invalid login credentials"
+            ? "Email or password is incorrect. Check your details, or use Forgot password to set a new password."
+            : error.message);
+        }
+      }
+    } catch {
+      setAuthMessage("We couldn't reach the authentication service. Please try again.");
+    } finally {
+      setAuthBusy(false);
     }
+  }
+
+  async function saveNewPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword.length < 8) {
+      setAuthMessage("Use at least 8 characters for your new password.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
     setAuthBusy(false);
+    if (error) {
+      setAuthMessage(error.message);
+    } else {
+      setIsPasswordRecovery(false);
+      setNewPassword("");
+      setAuthMessage("");
+      notify("Your password has been updated.");
+    }
   }
 
   async function signOut() {
@@ -278,21 +322,34 @@ export default function Home() {
     return <main className="auth-shell"><div className="auth-card"><div className="brand-mark"><Target size={20} /></div><p className="auth-muted">Preparing your workspace…</p></div></main>;
   }
 
+  if (isPasswordRecovery) {
+    return <main className="auth-shell"><div className="auth-card">
+      <div className="auth-brand"><div className="brand-mark"><Target size={20} /></div><div><div className="brand-name">dealpilot</div><div className="auth-brand-caption">Sales follow-through</div></div></div>
+      <div className="auth-eyebrow">Account security</div><h1 className="auth-title">Choose a new password.</h1>
+      <p className="auth-description">Use at least 8 characters. This will replace your current password.</p>
+      <form className="auth-form" onSubmit={saveNewPassword}>
+        <label className="field"><span>New password</span><input type="password" minLength={8} required autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+        {authMessage && <div className="auth-message" role="status">{authMessage}</div>}
+        <button type="submit" className="button-primary auth-submit" disabled={authBusy}>{authBusy ? "Saving…" : "Update password"} <ArrowRight size={14} /></button>
+      </form>
+    </div></main>;
+  }
+
   if (!user) {
     return (
       <main className="auth-shell">
         <div className="auth-card">
           <div className="auth-brand"><div className="brand-mark"><Target size={20} /></div><div><div className="brand-name">dealpilot</div><div className="auth-brand-caption">Sales follow-through</div></div></div>
           <div className="auth-eyebrow">A calmer way to close</div>
-          <h1 className="auth-title">{authMode === "signin" ? "Welcome back." : "Create your workspace."}</h1>
+          <h1 className="auth-title">{authMode === "signin" ? "Welcome back." : authMode === "signup" ? "Create your workspace." : "Reset your password."}</h1>
           <p className="auth-description">Keep proposals, next steps and important client conversations moving.</p>
           <form className="auth-form" onSubmit={submitAuth}>
             <label className="field"><span>Email address</span><input type="email" required autoComplete="email" placeholder="you@company.com" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /></label>
-            <label className="field"><span>Password</span><input type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder="At least 8 characters" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /></label>
+            {authMode !== "forgot" && <label className="field"><span>Password</span><input type="password" minLength={8} required autoComplete={authMode === "signin" ? "current-password" : "new-password"} placeholder="At least 8 characters" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /></label>}
             {authMessage && <div className="auth-message" role="status">{authMessage}</div>}
-            <button type="submit" className="button-primary auth-submit" disabled={authBusy}>{authBusy ? "Please wait…" : authMode === "signin" ? "Sign in to DealPilot" : "Create account"} <ArrowRight size={14} /></button>
+            <button type="submit" className="button-primary auth-submit" disabled={authBusy}>{authBusy ? "Please wait…" : authMode === "signin" ? "Sign in to DealPilot" : authMode === "signup" ? "Create account" : "Send reset link"} <ArrowRight size={14} /></button>
           </form>
-          <div className="auth-switch">{authMode === "signin" ? "New to DealPilot?" : "Already have an account?"}<button onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setAuthMessage(""); }}>{authMode === "signin" ? "Create an account" : "Sign in"}</button></div>
+          <div className="auth-switch">{authMode === "signin" ? <>New to DealPilot? <button onClick={() => { setAuthMode("signup"); setAuthMessage(""); }}>Create an account</button></> : authMode === "signup" ? <>Already have an account? <button onClick={() => { setAuthMode("signin"); setAuthMessage(""); }}>Sign in</button></> : <>Remembered your password? <button onClick={() => { setAuthMode("signin"); setAuthMessage(""); }}>Sign in</button></>}</div>{authMode === "signin" && <button className="auth-forgot" type="button" onClick={() => { setAuthMode("forgot"); setAuthMessage(""); }}>Forgot password?</button>}
           <div className="auth-footnote">Your deal records are private to your account. Access is enforced by Supabase row-level security.</div>
         </div>
       </main>
