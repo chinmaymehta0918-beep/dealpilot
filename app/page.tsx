@@ -195,6 +195,8 @@ export default function Home() {
         window.setTimeout(() => { if (alive) void loadDeals(); }, 0);
       } else {
         setDeals([]);
+        setFollowUps([]);
+        setActiveFollowUpId(null);
         setDataLoading(false);
       }
       setAuthLoading(false);
@@ -397,13 +399,13 @@ export default function Home() {
       return;
     }
     const { error } = await supabase.from("follow_ups")
-      .update({ status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({ subject: draftSubject.trim(), body: draft.trim(), status: "completed", completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", activeFollowUpId);
     if (error) {
       notify("Could not update follow-up status: " + error.message);
       return;
     }
-    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId ? { ...item, status: "completed" } : item));
+    setFollowUps((current) => current.map((item) => item.id === activeFollowUpId ? { ...item, subject: draftSubject.trim(), body: draft.trim(), status: "completed" } : item));
     setActiveFollowUpId(null);
     notify("Marked as sent. Remember, DealPilot does not send emails itself yet.");
   }
