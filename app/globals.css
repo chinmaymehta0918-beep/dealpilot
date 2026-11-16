@@ -231,3 +231,21 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .auth-forgot { display: block; margin: 10px auto 0; padding: 4px 6px; border: 0; color: #28734f; background: transparent; font-size: 11px; font-weight: 700; cursor: pointer; }
 .auth-forgot:hover, .auth-switch button:hover { text-decoration: underline; }
+
+.followup-ai-panel { display: grid; gap: 11px; padding: 14px; border: 1px solid #dfece2; border-radius: 11px; background: linear-gradient(135deg,#f5faf6,#f8faf8); }
+.followup-ai-title { display: flex; align-items: center; gap: 7px; color: #315f43; font-size: 12px; font-weight: 750; }
+.followup-ai-copy { color: #77867c; font-size: 10px; line-height: 1.55; }
+.followup-controls { display: grid; grid-template-columns: .75fr 1.5fr; gap: 10px; }
+.followup-controls .field span { color: #536359; font-size: 10px; font-weight: 700; }
+.followup-controls input, .followup-controls select { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid #e3eae4; border-radius: 8px; background: #fff; color: #2e3c33; outline: 0; font-size: 11px; }
+.followup-controls input:focus, .followup-controls select:focus { border-color: #7ab28e; box-shadow: 0 0 0 3px rgba(122,178,142,.13); }
+.followup-generate { justify-content: center; width: 100%; padding: 10px 13px; }
+.saved-followups { display: grid; gap: 9px; border-top: 1px solid #edf1ed; padding-top: 14px; }
+.saved-followups-heading { color: #33473a; font-size: 11px; font-weight: 750; }
+.saved-followups-empty { color: #97a198; font-size: 10px; padding: 5px 0; }
+.saved-followup-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid #edf1ed; border-radius: 8px; background: #fcfdfc; }
+.saved-followup-main { display: grid; gap: 4px; min-width: 0; }
+.saved-followup-main strong { overflow: hidden; color: #425349; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.saved-followup-main span { color: #9aa49d; font-size: 9px; }
+.row-action:disabled { cursor: not-allowed; opacity: .4; }
+@media (max-width: 560px) { .followup-controls { grid-template-columns: 1fr; } }
