@@ -143,7 +143,8 @@ export default function Home() {
       setDataLoading(false);
     };
 
-    supabase.auth.getSession().then((result: { data: { session: Session | null }; error: { message: string } | null }) => {\n      const { data, error } = result;
+    supabase.auth.getSession().then((result: { data: { session: Session | null }; error: { message: string } | null }) => {
+      const { data, error } = result;
       if (!alive) return;
       if (error) setAuthMessage(error.message);
       const currentUser = data.session?.user;
